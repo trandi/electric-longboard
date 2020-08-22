@@ -17,6 +17,7 @@ long lastScreenRefresh = 0;
 
 #define PIN_BATT_VOLT A2
 #define PIN_BATT_AMP A1
+#define PIN_MOT_CTRL_CURR_FWD A0 // BTS7960 current sensing feature, using a 1KOhm resistor to ground
 
 #define PIN_MOT_PWD 6
 #define PIN_MOT_FWD_ENABLE 8
@@ -26,9 +27,10 @@ long lastScreenRefresh = 0;
 
 // populated in the SerialControl part
 uint8_t joystickX = 0, joystickY = 0;
+boolean brakeButton;
 
 
-#define CURRENT_LIMIT 10 // current in amps before we start forcing the PWM duty cycle down to reduce the current withing an acceptable limit
+#define CURRENT_LIMIT 7 // current in amps before we start forcing the PWM duty cycle down to reduce the current withing an acceptable limit
 uint8_t currentLimitThrotling = 0;
 
 int speed = 0;
@@ -52,6 +54,7 @@ void setup() {
   lcd.setContrast(60);
   lcd.setTextSize(1);
   lcd.setTextColor(BLACK);
+  lcd.setRotation(2); 
 
   setup_serial_control();
 
@@ -69,31 +72,44 @@ void loop() {
   float voltage = batteryVoltage();
   float amps = batteryCurrent();
   if(amps > CURRENT_LIMIT && currentLimitThrotling < 255) {
-    currentLimitThrotling ++;
+    currentLimitThrotling += 2;
   } else if (amps < CURRENT_LIMIT && currentLimitThrotling > 0) {
     currentLimitThrotling --;
   }
   
   lcd.print(round(voltage)); lcd.print("V/"); lcd.print(amps, 1); lcd.print("A/"); lcd.print(round(voltage * amps)); lcd.println("W");
-  lcd.print("Joy: "); lcd.println(joystickY);
+  lcd.print("Fwd:"); lcd.print(fwdCurrent(), 1); lcd.println("A");
+  lcd.print("Joy:"); lcd.print(joystickY); lcd.print("/B:"); lcd.println(brakeButton);
+
+  if(brakeButton) {
+    // pull BOTH wires of the motor to GND and ENABLE both <-> connect the 2 wires which 
+    digitalWrite(PIN_MOT_BACK_ENABLE, LOW);      
+    digitalWrite(PIN_MOT_FWD_ENABLE, LOW);
+
+    digitalWrite(PIN_MOT_PWD, HIGH);
+  } else {
+    if(isValidJoystickValue(joystickY) && voltage > 20) {
+      if(joystickY >= JOYSTICK_MID) {
+        // Forward
+        digitalWrite(PIN_MOT_BACK_ENABLE, LOW);      
+        digitalWrite(PIN_MOT_FWD_ENABLE, HIGH);
+      } else {
+        // Backwards
+        digitalWrite(PIN_MOT_FWD_ENABLE, LOW);
+        digitalWrite(PIN_MOT_BACK_ENABLE, HIGH);
+      }
   
-  if(isValidJoystickValue(joystickY) && voltage > 20) {
-    if(joystickY >= JOYSTICK_MID) {
-      digitalWrite(PIN_MOT_FWD_ENABLE, HIGH);
-      digitalWrite(PIN_MOT_BACK_ENABLE, LOW);
+      speed = constrain(round(abs(joystickY - JOYSTICK_MID) * 2.55) - currentLimitThrotling, 0, 255);
     } else {
-      digitalWrite(PIN_MOT_FWD_ENABLE, LOW);
-      digitalWrite(PIN_MOT_BACK_ENABLE, HIGH);
+      speed = 0;
     }
 
-    speed = constrain(round(abs(joystickY - JOYSTICK_MID) * 2.55) - currentLimitThrotling, 0, 255);
-  } else {
-    speed = 0;
+    analogWrite(PIN_MOT_PWD, speed);
   }
 
   
   lcd.print("Lmt "); lcd.print(currentLimitThrotling);lcd.print("/S "); lcd.println(speed);
-  analogWrite(PIN_MOT_PWD, speed);
+
   
 
 
@@ -104,6 +120,13 @@ void loop() {
   }
 }
 
+float averageFwdCurrent = 0;
+float fwdCurrent() {
+  // analogRead -> [0 .. 1023] -> [0..3.3]Volts
+  // Vis = FwdCurrent * Resistor / 8500 -> FwdCurrent = Vis * 8.5  (using 1KOhms resistor) = analogRead * 3.3 / 1023 * 8.5
+  averageFwdCurrent = averageFwdCurrent * 0.95 + (analogRead(PIN_MOT_CTRL_CURR_FWD) * 0.0274) * 0.05;
+  return averageFwdCurrent; 
+}
 
 
 float batteryVoltage() {

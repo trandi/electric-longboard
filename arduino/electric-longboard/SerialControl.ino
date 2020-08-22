@@ -56,6 +56,7 @@ void serialControlLoop() {
                     
           joystickX = _msg[0];
           joystickY = _msg[1];
+          brakeButton = !(_msg[5] & 1); // least significant bit is the z_button on the Wii Remote
         } else {
           //Serial.print("Wrong CRC: ");Serial.print(currChar);Serial.print(" Expected: ");Serial.println(crc);
         }
